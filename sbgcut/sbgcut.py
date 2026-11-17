@@ -34,7 +34,7 @@ class SbgCut(inkex.EffectExtension):
         pars.add_argument("--bed_h", type=float, default=180.0, help="bed height, mm")
         pars.add_argument("--flip_y", type=inkex.Boolean, default=True)
         pars.add_argument("--speed", type=int, default=2)
-        pars.add_argument("--force", type=int, default=60)
+        pars.add_argument("--force", type=int, default=60, help="blade force 30..135 step 15")
         pars.add_argument("--eject", type=float, default=0.0, help="eject feed, mm")
         pars.add_argument("--selection_only", type=inkex.Boolean, default=False)
         pars.add_argument("--dry_run", type=inkex.Boolean, default=False)
@@ -52,18 +52,27 @@ class SbgCut(inkex.EffectExtension):
                 out.append(pts)
         return out
 
+    def _leaf_shapes(self, roots):
+        """Yield only drawable leaf shapes; never Groups/Layers (whose .path would
+        duplicate their children and cause every shape to be cut twice)."""
+        for el in roots:
+            if isinstance(el, inkex.Group):
+                for sub in el.descendants():
+                    if isinstance(sub, inkex.ShapeElement) and not isinstance(sub, inkex.Group):
+                        yield sub
+            elif isinstance(el, inkex.ShapeElement):
+                yield el
+
     def collect_polylines(self):
-        # flatness mm -> user units
         flat_uu = self.svg.unittouu("%fmm" % self.options.flatness)
         if self.options.selection_only and len(self.svg.selection):
-            elements = self.svg.selection
+            roots = list(self.svg.selection)
         else:
-            elements = self.svg.descendants()
+            roots = list(self.svg.descendants())
         polylines_uu = []
-        for el in elements:
-            if isinstance(el, inkex.ShapeElement) and hasattr(el, "path"):
+        for el in self._leaf_shapes(roots):
+            if hasattr(el, "path"):
                 polylines_uu += self._flatten(el, flat_uu)
-        # user units -> mm (uutounit is a linear scale on each coordinate)
         out = []
         for pl in polylines_uu:
             out.append([(self.svg.uutounit(x, "mm"), self.svg.uutounit(y, "mm"))
@@ -85,7 +94,8 @@ class SbgCut(inkex.EffectExtension):
             fp = os.path.join(tempfile.gettempdir(), "sbgcut_job.txt")
             with open(fp, "w") as f:
                 f.write(job)
-            inkex.utils.debug("Dry run - job NOT sent.\nWrote %d bytes to %s" % (len(job), fp))
+            inkex.utils.debug("Dry run - job NOT sent.\n%d paths, %d bytes.\nWrote %s"
+                              % (len(polylines), len(job), fp))
             return
         try:
             import sbg_link as L
