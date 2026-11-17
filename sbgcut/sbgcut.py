@@ -5,10 +5,6 @@ sbgcut.py - Inkscape extension: cut the document (or selection) on an SBG / SKY 
 Install: copy this file plus sbg_protocol.py, sbg_link.py and sbgcut.inx into your
 Inkscape user extensions folder (Edit > Preferences > System > User extensions),
 then restart Inkscape. It appears under Extensions > Export > Cut on SBG plotter.
-
-It flattens all curves to polylines (via inkex), converts to millimetres, then hands
-off to the same protocol code used by the standalone tools: unlock handshake + WSJP
-encoding + U/D job, streamed over the serial port.
 """
 import os
 import sys
@@ -52,26 +48,28 @@ class SbgCut(inkex.EffectExtension):
                 out.append(pts)
         return out
 
-    def _leaf_shapes(self, roots):
-        """Yield only drawable leaf shapes; never Groups/Layers (whose .path would
-        duplicate their children and cause every shape to be cut twice)."""
-        for el in roots:
-            if isinstance(el, inkex.Group):
-                for sub in el.descendants():
-                    if isinstance(sub, inkex.ShapeElement) and not isinstance(sub, inkex.Group):
-                        yield sub
-            elif isinstance(el, inkex.ShapeElement):
-                yield el
-
     def collect_polylines(self):
         flat_uu = self.svg.unittouu("%fmm" % self.options.flatness)
+        # Build the candidate node list. Groups/Layers are containers: we must NOT
+        # emit their .path (it duplicates their children) and we must NOT both descend
+        # into them AND visit their children as top-level nodes - either doubles output.
         if self.options.selection_only and len(self.svg.selection):
-            roots = list(self.svg.selection)
+            nodes = []
+            for el in self.svg.selection:
+                if isinstance(el, inkex.Group):
+                    nodes += list(el.descendants())   # a selected group -> its leaves
+                else:
+                    nodes.append(el)
         else:
-            roots = list(self.svg.descendants())
+            nodes = list(self.svg.descendants())       # already contains every leaf once
+        seen = set()
         polylines_uu = []
-        for el in self._leaf_shapes(roots):
-            if hasattr(el, "path"):
+        for el in nodes:
+            if (isinstance(el, inkex.ShapeElement)
+                    and not isinstance(el, inkex.Group)
+                    and hasattr(el, "path")
+                    and id(el) not in seen):
+                seen.add(id(el))
                 polylines_uu += self._flatten(el, flat_uu)
         out = []
         for pl in polylines_uu:
